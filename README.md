@@ -1,21 +1,47 @@
-# 28-Bit CPU in Logisim
+<div align="center">
 
-A custom **28-bit CPU architecture** implemented in **Logisim**, featuring a ROM-based microprogrammed control unit, a reusable 28-bit ALU, accumulator-based datapath, and a dedicated Booth multiplication unit.
+# 28-Bit Microprogrammed CPU in Logisim
 
-## Highlights
+### A modular 28-bit processor with a ROM-based control unit, reusable ALU datapath, INC/DEC support, and an integrated Booth multiplier
 
-- **28-bit data word**
-- **24-bit memory address field**
-- **4-bit opcode**
-- Accumulator-based datapath
-- 28-bit ALU with AND, ADD, OR, and SUB
-- INC/DEC implemented by reusing the existing ADD/SUB datapath with a constant-1 source
-- ROM-based microprogrammed Control Unit
-- **6-bit micro-sequence counter**
-- **64 × 7 control ROM**
-- Integrated **28 × 28 Booth multiplier**
-- 56-bit multiplication result exposed as `product_high : product_low`
-- Lower 28 bits of a MUL result are routed back to the CPU accumulator
+![Architecture](https://img.shields.io/badge/Architecture-28--bit-1f6feb?style=for-the-badge)
+![Control](https://img.shields.io/badge/Control-Microprogrammed-6f42c1?style=for-the-badge)
+![Simulator](https://img.shields.io/badge/Simulator-Logisim%202.7.1-f97316?style=for-the-badge)
+![Multiplier](https://img.shields.io/badge/Multiplier-Booth%2028%C3%9728-0f766e?style=for-the-badge)
+
+A computer-architecture project focused on **datapath design, microprogrammed control, instruction execution, ALU reuse, and iterative signed multiplication**.
+
+</div>
+
+---
+
+## Overview
+
+This repository contains a custom **28-bit CPU implemented in Logisim**. The processor uses an accumulator-oriented datapath, a **64 × 7 control ROM**, a **6-bit micro-sequence counter**, and separate reusable circuit libraries for the ALU and Booth multiplier.
+
+The design currently supports **11 instructions**, including arithmetic, logic, memory transfer, branching, accumulator increment/decrement, halt, and multiplication.
+
+### Key specifications
+
+| Feature | Implementation |
+|---|---|
+| Data word | **28 bits** |
+| Instruction size | **28 bits / 7 hex digits** |
+| Opcode | **4 bits** |
+| Address / operand field | **24 bits** |
+| Main memory | **24-bit address, 28-bit data** |
+| Program Counter | **24-bit counter** |
+| MAR | **24 bits** |
+| MBR | **28 bits** |
+| IR | **4 bits** |
+| Accumulator | **28 bits** |
+| ALU operation select | **2 bits** |
+| Micro-sequence counter | **6 bits** |
+| Control ROM | **64 addresses × 7-bit control word** |
+| Multiplier | **28 × 28 Booth multiplier** |
+| Full multiplication result | **56 bits = product_high : product_low** |
+
+---
 
 ## Repository Structure
 
@@ -27,57 +53,102 @@ A custom **28-bit CPU architecture** implemented in **Logisim**, featuring a ROM
 └── README.md
 ```
 
-### Circuit Files
-
-| File | Purpose |
+| File | Responsibility |
 |---|---|
-| `28bit_cpu.circ` | Main CPU, datapath, RAM interface, registers, and Control Unit |
-| `28bit_alu.circ` | Standalone 28-bit ALU and supporting arithmetic/logic subcircuits |
-| `Booths_multiplication28bit.circ` | Dedicated Booth multiplication datapath and controller |
+| `28bit_cpu.circ` | Main CPU, registers, datapath, RAM interface, Control Unit, and Booth integration |
+| `28bit_alu.circ` | 28-bit arithmetic/logic unit and supporting ALU subcircuits |
+| `Booths_multiplication28bit.circ` | Iterative 28-bit Booth multiplier with start/done handshake and 56-bit result |
+| `README.md` | Architecture, ISA, execution flow, and usage documentation |
 
-> Keep all three `.circ` files in the **same directory** so Logisim can resolve the circuit-library dependencies.
+> Keep the three `.circ` files in the **same directory**. The main CPU loads the ALU and Booth multiplier as relative Logisim libraries.
 
-## CPU Architecture
+---
 
-The processor uses the following major registers and datapath elements:
+## High-Level Architecture
 
-- **PC** — 24-bit Program Counter
-- **MAR** — 24-bit Memory Address Register
-- **MBR** — 28-bit Memory Buffer Register
-- **IR** — 4-bit Instruction Register / opcode
-- **AC** — 28-bit Accumulator
-- **ALU** — 28-bit arithmetic and logic unit
-- **Main Memory** — 28-bit data words addressed through the 24-bit address path
-- **Control Unit** — ROM-based microprogrammed sequencer
+```mermaid
+flowchart LR
+    MEM["Main Memory<br/>24-bit address / 28-bit data"]
+    PC["PC<br/>24-bit"]
+    MAR["MAR<br/>24-bit"]
+    MBR["MBR<br/>28-bit"]
+    IR["IR<br/>4-bit opcode"]
+    AC["Accumulator<br/>28-bit"]
+    ALU["28-bit ALU<br/>AND / ADD / OR / SUB"]
+    ONE["Constant 1"]
+    BM["Booth Multiplier<br/>28 × 28"]
+    PH["product_high<br/>28-bit"]
+    PL["product_low<br/>28-bit"]
+    CU["Microprogrammed Control Unit<br/>6-bit µCounter + 64×7 ROM"]
+
+    PC --> MAR
+    MAR -->|Addr| MEM
+    MEM -->|DataOut| MBR
+    MBR -->|Opcode| IR
+    MBR -->|Operand / data| ALU
+    AC --> ALU
+    ONE -->|INC / DEC operand| ALU
+    ALU -->|Normal write-back| AC
+
+    AC -->|M input| BM
+    MBR -->|Q input| BM
+    BM --> PH
+    BM --> PL
+    PL -->|MUL write-back| AC
+
+    IR -->|Opcode| CU
+    CU -->|Datapath controls| PC
+    CU -->|Datapath controls| MAR
+    CU -->|Datapath controls| MBR
+    CU -->|Operation / LoadAc| ALU
+    CU -->|mul_start| BM
+    BM -->|Done| CU
+```
+
+The CPU follows a **control-path / datapath separation**: the ROM-based Control Unit decides *what should happen*, while the registers, multiplexers, ALU, RAM interface, and Booth unit perform the actual data movement and computation.
+
+---
 
 ## Instruction Format
 
+Every machine instruction is one 28-bit word:
+
 ```text
- 27                     24 23                               0
-+-------------------------+----------------------------------+
-|      OPCODE (4 bits)    |      ADDRESS / OPERAND (24)      |
-+-------------------------+----------------------------------+
+ 27                    24 23                                0
++------------------------+-----------------------------------+
+|      OPCODE (4)        |       ADDRESS / OPERAND (24)      |
++------------------------+-----------------------------------+
 ```
 
-Each machine instruction is therefore one **28-bit word**, represented conveniently as **7 hexadecimal digits**.
+Because 28 bits correspond to **7 hexadecimal digits**, instructions are easy to load manually into RAM.
 
-## Instruction Set
+Example:
+
+```text
+A000005
+│└────── 24-bit address = 0x000005
+└─────── opcode A = MUL
+```
+
+---
+
+## Instruction Set Architecture
 
 | Opcode | Mnemonic | Operation |
 |---:|---|---|
-| `0x0` | AND | `AC ← AC AND M[address]` |
-| `0x1` | ADD | `AC ← AC + M[address]` |
-| `0x2` | STO | `M[address] ← AC` |
-| `0x3` | OR | `AC ← AC OR M[address]` |
-| `0x4` | SUB | `AC ← AC - M[address]` |
-| `0x5` | BUN | `PC ← address` |
-| `0x6` | LDA | `AC ← M[address]` |
-| `0x7` | HLT | Halt processor execution |
-| `0x8` | INC | `AC ← AC + 1` |
-| `0x9` | DEC | `AC ← AC - 1` |
-| `0xA` | MUL | Multiply `AC` by `M[address]`; write the lower 28 bits back to `AC` |
+| `0x0` | **AND** | `AC ← AC AND M[address]` |
+| `0x1` | **ADD** | `AC ← AC + M[address]` |
+| `0x2` | **STO** | `M[address] ← AC` |
+| `0x3` | **OR** | `AC ← AC OR M[address]` |
+| `0x4` | **SUB** | `AC ← AC - M[address]` |
+| `0x5` | **BUN** | `PC ← address` |
+| `0x6` | **LDA** | `AC ← M[address]` |
+| `0x7` | **HLT** | Halt processor execution |
+| `0x8` | **INC** | `AC ← AC + 1` |
+| `0x9` | **DEC** | `AC ← AC - 1` |
+| `0xA` | **MUL** | `AC × M[address]`; lower 28 result bits are written back to AC |
 
-For INC and DEC, the 24-bit operand field is unused. Typical encodings are:
+For instructions that do not use an address field, the lower 24 bits can remain zero:
 
 ```text
 INC = 8000000
@@ -85,108 +156,354 @@ DEC = 9000000
 HLT = 7000000
 ```
 
-## ALU
+---
 
-The 28-bit ALU supports four primary operations selected by a 2-bit operation code:
+## ALU Design
 
-| Operation bits | Function |
+The reusable 28-bit ALU uses a 2-bit operation code:
+
+| Operation | ALU function |
 |---|---|
 | `00` | AND |
 | `01` | ADD |
 | `10` | OR |
 | `11` | SUB |
 
-INC and DEC reuse the ADD/SUB hardware by selecting a 28-bit constant `1` as the ALU's second operand.
+### Hardware reuse for INC and DEC
 
-## Booth Multiplication
-
-The multiplier is integrated as a separate Logisim circuit with CPU-facing control and result signals.
-
-Conceptually:
+INC and DEC do **not** require separate arithmetic units. A 28-bit constant `1` is selected as the second ALU operand:
 
 ```text
-AC ---------------------> M
-MBR --------------------> Q
-
-CPU mul_start ----------> Start
-Booth Done -------------> Control Unit
-
-product_low ------------> AC write-back path
-product_high -----------> Upper 28-bit product output
+INC: AC + 1  → reuse ADD
+DEC: AC - 1  → reuse SUB
 ```
 
-The complete multiplication result is:
+```mermaid
+flowchart LR
+    MBR["MBR / normal operand"]
+    C1["Constant 1"]
+    MUX["ALU-B MUX"]
+    AC["AC"]
+    ALU["28-bit ALU"]
+    WB["AC write-back"]
+
+    MBR -->|normal instructions| MUX
+    C1 -->|INC / DEC| MUX
+    MUX --> ALU
+    AC --> ALU
+    ALU --> WB
+    WB --> AC
+```
+
+This keeps the datapath compact and demonstrates **functional-unit reuse** rather than duplicating arithmetic hardware.
+
+---
+
+## Microprogrammed Control Unit
+
+The control path is based on:
+
+- a **6-bit micro-sequence counter**
+- a **64 × 7 ROM**
+- a **4-to-16 decoder**
+- operation-encoding logic
+- combined datapath control signals
+- dedicated MUL handshake logic
+
+The ROM output is a 7-bit control word. The upper portion selects a decoder action while the lower bits manage micro-sequencer behavior such as count, clear, or loading the next instruction-specific microaddress.
+
+### Instruction execution flow
+
+```mermaid
+flowchart TD
+    RESET["Reset"]
+    FETCH1["Fetch 1<br/>MAR ← PC"]
+    FETCH2["Fetch 2<br/>MBR ← Memory[MAR]"]
+    FETCH3["Fetch 3<br/>IR ← opcode<br/>PC ← PC + 1"]
+    DISPATCH["Load instruction-specific<br/>microprogram start address"]
+    EXEC["Execute instruction micro-operations"]
+    DONE{"Instruction complete?"}
+    HALT{"HLT?"}
+    STOP["Stop / hold"]
+    
+    RESET --> FETCH1
+    FETCH1 --> FETCH2
+    FETCH2 --> FETCH3
+    FETCH3 --> DISPATCH
+    DISPATCH --> EXEC
+    EXEC --> DONE
+    DONE -- No --> EXEC
+    DONE -- Yes --> HALT
+    HALT -- No --> FETCH1
+    HALT -- Yes --> STOP
+```
+
+---
+
+## Booth Multiplication Integration
+
+Multiplication is implemented as a dedicated **28 × 28 iterative Booth multiplier**.
+
+### CPU ↔ Multiplier interface
+
+```mermaid
+flowchart LR
+    AC["AC<br/>28-bit"] -->|M| BOOTH["Booth Multiplier"]
+    MBR["MBR<br/>28-bit"] -->|Q| BOOTH
+
+    CU["Control Unit"] -->|mul_start| BOOTH
+    BOOTH -->|Done| CU
+
+    BOOTH -->|product_low| RMUX["AC Result MUX"]
+    BOOTH -->|product_high| HIGH["Upper 28-bit output"]
+    RMUX --> AC
+
+    CU -->|mul_load| RMUX
+```
+
+The complete product is:
 
 ```text
-[ product_high (28 bits) ][ product_low (28 bits) ]
-             = 56-bit product
+┌─────────────────────────────── 56-bit product ───────────────────────────────┐
+│                  product_high                 │          product_low          │
+│                     28 bits                   │             28 bits           │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The current CPU write-back path stores **`product_low` in AC**. The upper 28 bits remain available through `product_high` and can be connected to a dedicated HI register in a future extension.
+The current CPU stores:
 
-### MUL Microprogram
+```text
+AC ← product_low
+```
 
-The MUL opcode is `0xA`, so its execution microprogram starts at `0x2B`.
+The upper half remains available at `product_high`. It is **not currently stored in a dedicated CPU HI register**.
 
-| µAddress | Action |
-|---|---|
-| `2B` | `MAR ← MBR[23:0]` |
-| `2C` | Read memory operand into MBR |
-| `2D` | Assert `mul_start` |
-| `2E` | Wait for Booth `Done` |
-| `2F` | Assert `mul_load`; write `product_low` into AC |
-| `30` | Clear the micro-sequence counter and return to fetch |
+---
+
+## MUL Control Flow
+
+Opcode `0xA` starts at microaddress `0x2B`.
+
+```mermaid
+flowchart TD
+    M2B["µ2B<br/>MAR ← operand address"]
+    M2C["µ2C<br/>MBR ← Memory[MAR]"]
+    M2D["µ2D<br/>mul_start = 1"]
+    M2E["µ2E<br/>Wait state"]
+    CHECK{"Booth Done?"}
+    M2F["µ2F<br/>mul_load = 1<br/>AC ← product_low"]
+    M30["µ30<br/>Clear µCounter"]
+    FETCH["Fetch next instruction"]
+
+    M2B --> M2C --> M2D --> M2E --> CHECK
+    CHECK -- No --> M2E
+    CHECK -- Yes --> M2F
+    M2F --> M30 --> FETCH
+```
+
+| µAddress | Control action | Architectural effect |
+|---|---|---|
+| `2B` | Load operand address | `MAR ← MBR[23:0]` |
+| `2C` | Memory read | `MBR ← M[MAR]` |
+| `2D` | Assert `mul_start` | Initialize/start Booth multiplication |
+| `2E` | Wait | Hold micro-sequencer until `Done = 1` |
+| `2F` | Assert `mul_load` | `AC ← product_low` |
+| `30` | Clear micro-sequence counter | Return to common fetch |
+
+This handshake allows the CPU to wait for a multi-cycle arithmetic unit **without advancing the instruction sequence prematurely**.
+
+---
+
+## End-to-End CPU Flow
+
+```mermaid
+flowchart TD
+    START["Reset / Start CPU"]
+    FETCH["Fetch instruction from RAM"]
+    DECODE["Decode 4-bit opcode"]
+    KIND{"Instruction class"}
+
+    MEMOP["Memory-reference operation<br/>AND / ADD / STO / OR / SUB / LDA"]
+    CTRL["Control transfer<br/>BUN / HLT"]
+    ACC["Accumulator-only operation<br/>INC / DEC"]
+    MUL["MUL"]
+
+    ALU["Execute through ALU"]
+    BOOTH["Run Booth multiplier<br/>until Done"]
+    WRITE["Write result / update state"]
+    NEXT["Return to Fetch"]
+
+    START --> FETCH --> DECODE --> KIND
+    KIND --> MEMOP --> ALU --> WRITE
+    KIND --> CTRL --> WRITE
+    KIND --> ACC --> ALU
+    KIND --> MUL --> BOOTH --> WRITE
+    WRITE --> NEXT --> FETCH
+```
+
+---
 
 ## Example Program — 3 × 4
 
-A simple RAM program can be used to demonstrate multiplication:
+The following RAM contents demonstrate LDA, MUL, STO, and HLT:
 
-| Address | Value | Meaning |
+| Address | Machine word | Meaning |
 |---:|---:|---|
-| `0` | `6000004` | `LDA 4` |
-| `1` | `A000005` | `MUL 5` |
-| `2` | `2000006` | `STO 6` |
-| `3` | `7000000` | `HLT` |
-| `4` | `0000003` | Data = 3 |
-| `5` | `0000004` | Data = 4 |
-| `6` | `0000000` | Result location |
+| `0x000000` | `6000004` | `LDA 0x000004` |
+| `0x000001` | `A000005` | `MUL 0x000005` |
+| `0x000002` | `2000006` | `STO 0x000006` |
+| `0x000003` | `7000000` | `HLT` |
+| `0x000004` | `0000003` | Data = 3 |
+| `0x000005` | `0000004` | Data = 4 |
+| `0x000006` | `0000000` | Result location |
 
 Expected lower-word result:
 
 ```text
-AC = 000000C
-M[6] = 000000C
+3 × 4 = 12 decimal = 0x000000C
+
+AC     = 000000C
+M[006] = 000000C
 ```
 
-## Running the Project
+---
 
-1. Clone or download this repository.
-2. Keep the three `.circ` files together in the repository root.
-3. Open `28bit_cpu.circ` in **Logisim 2.7.1 or a compatible Logisim version**.
-4. Load a program into RAM using Logisim's memory editor.
-5. Reset the CPU.
-6. Advance the clock manually or enable ticks.
-7. Observe the PC, MAR, MBR, IR, AC, control signals, RAM, and Booth multiplier states while the program executes.
+## How to Run
 
-## Design Notes
+### Requirements
 
-- The CPU is intentionally modular: ALU, CPU, Control Unit, and Booth multiplier are separated into reusable circuit blocks.
-- The control unit uses microcode rather than a large hardwired instruction-state network.
-- INC and DEC demonstrate hardware reuse instead of introducing separate arithmetic units.
-- MUL uses a start/done handshake so the micro-sequencer can wait while the iterative Booth multiplier completes.
-- The repository versions use **relative same-directory circuit-library references** for portability.
+- **Logisim 2.7.1** or a compatible Logisim implementation
+- All three `.circ` files kept together
+
+### Procedure
+
+1. Clone or download the repository.
+2. Confirm these files are in the same directory:
+   - `28bit_cpu.circ`
+   - `28bit_alu.circ`
+   - `Booths_multiplication28bit.circ`
+3. Open `28bit_cpu.circ`.
+4. Open the main circuit.
+5. Load a machine-code program into RAM using **Edit Contents**.
+6. Assert/reset the CPU.
+7. Return Reset low.
+8. Advance the clock manually or enable simulation ticks.
+9. Observe the datapath and control signals.
+
+### Recommended signals to watch
+
+```text
+PC
+MAR
+MBR
+IR
+AC
+µCounter
+ROM output
+Operation
+LoadAc
+mul_start
+booth_done
+mul_load
+product_low
+product_high
+RAM DataOut
+```
+
+For MUL, the expected sequence is:
+
+```text
+2D → 2E → 2E → ... → 2E → 2F → 30 → 00
+     waiting for Booth Done ↑
+```
+
+---
+
+## Datapath Summary
+
+```text
+                         ┌───────────────────────┐
+                         │   Control Unit        │
+                         │  µCounter + ROM       │
+                         └──────────┬────────────┘
+                                    │ control
+                                    ▼
+PC ──► MAR ──► RAM ──► MBR ──► ALU ──► AC
+                      │        ▲        │
+                      │        │        │
+                      │    Constant 1   │
+                      │                 │
+                      └──► Booth ◄──────┘
+                           │      ▲
+                    product_low  mul_start
+                           │
+                           └────────────► AC
+```
+
+---
+
+## Design Principles
+
+The project intentionally emphasizes several computer-architecture concepts:
+
+- **Microprogrammed control** instead of implementing every instruction with a separate hardwired state machine
+- **Hardware reuse** for INC/DEC by reusing ADD/SUB
+- **Modular circuit libraries** for CPU, ALU, and multiplication
+- **Explicit register-transfer behavior** through MAR, MBR, AC, IR, and PC
+- **Multi-cycle functional-unit handshaking** for Booth multiplication
+- **Separation of control path and datapath**
+- **Manual machine-code visibility**, useful for demonstrations and architecture labs
+
+---
+
+## Current Scope
+
+Implemented:
+
+- ✅ 28-bit CPU datapath
+- ✅ 24-bit memory addressing
+- ✅ ROM-based microprogrammed Control Unit
+- ✅ AND / ADD / STO / OR / SUB / BUN / LDA / HLT
+- ✅ INC / DEC
+- ✅ Integrated Booth multiplication
+- ✅ Start/Done multiplier handshake
+- ✅ 56-bit Booth result exposure
+- ✅ Lower 28-bit multiplication write-back to AC
+
+Current architectural limitation:
+
+- `product_high` is exposed by the Booth multiplier but is not stored in a dedicated architectural register.
+
+---
 
 ## Possible Extensions
 
-- Dedicated 28-bit `HI` register for the upper half of multiplication results
-- Additional arithmetic instructions
-- Conditional branch instructions
-- Status/flag register
-- Stack and subroutine support
-- Interrupt handling
-- Cache or additional memory hierarchy
-- Improved I/O subsystem
+- Add a dedicated **HI register** for `product_high`
+- Add conditional branch instructions
+- Add architectural status/flag register usage
+- Add stack and subroutine instructions
+- Add interrupts
+- Add I/O instructions and peripherals
+- Add cache / memory hierarchy experiments
+- Add an assembler for the 28-bit instruction format
+- Add automated regression programs for each opcode
 
-## Purpose
+---
 
-This project is intended for learning and demonstrating **computer architecture, datapath design, microprogrammed control, arithmetic circuits, instruction execution, and Logisim-based CPU construction**.
+## Educational Value
+
+This project demonstrates how a CPU is built from fundamental components rather than treated as a black box. It connects:
+
+**instruction encoding → fetch/decode → microcode → control signals → datapath movement → ALU execution → memory access → multi-cycle multiplication → write-back**
+
+That makes the repository useful for studying **Computer Architecture, Digital Logic Design, microprogrammed control, datapath construction, and Booth multiplication**.
+
+---
+
+<div align="center">
+
+### Built as a hands-on 28-bit CPU architecture project in Logisim
+
+**Main circuit:** `28bit_cpu.circ`
+
+</div>
