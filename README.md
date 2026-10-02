@@ -2,7 +2,7 @@
 
 # 28-Bit Microprogrammed CPU in Logisim
 
-### A modular 28-bit processor with a ROM-based control unit, reusable ALU datapath, INC/DEC support, and an integrated Booth multiplier
+### Final fixed revision — a modular 28-bit processor with microprogrammed control, reusable ALU hardware, INC/DEC support, and an integrated Booth multiplier
 
 ![Architecture](https://img.shields.io/badge/Architecture-28--bit-1f6feb?style=for-the-badge)
 ![Control](https://img.shields.io/badge/Control-Microprogrammed-6f42c1?style=for-the-badge)
@@ -17,9 +17,9 @@ A computer-architecture project focused on **datapath design, microprogrammed co
 
 ## Overview
 
-This repository contains a custom **28-bit CPU implemented in Logisim**. The processor uses an accumulator-oriented datapath, a **64 × 7 control ROM**, a **6-bit micro-sequence counter**, and separate reusable circuit libraries for the ALU and Booth multiplier.
+This repository contains the **final fixed three-circuit baseline** of a custom **28-bit CPU implemented in Logisim**. The processor uses an accumulator-oriented datapath, a **64 × 7 control ROM**, a **6-bit micro-sequence counter**, and reusable external circuit libraries for the ALU and Booth multiplier.
 
-The design currently supports **11 instructions**, including arithmetic, logic, memory transfer, branching, accumulator increment/decrement, halt, and multiplication.
+The design supports **11 machine instructions** covering arithmetic, logic, memory transfer, unconditional branching, accumulator increment/decrement, halt, and multi-cycle Booth multiplication. The documentation below is aligned with the committed `.circ` implementation rather than a generic CPU model.
 
 ### Key specifications
 
@@ -60,7 +60,15 @@ The design currently supports **11 instructions**, including arithmetic, logic, 
 | `Booths_multiplication28bit.circ` | Iterative 28-bit Booth multiplier with start/done handshake and 56-bit result |
 | `README.md` | Architecture, ISA, execution flow, and usage documentation |
 
-> Keep the three `.circ` files in the **same directory**. The main CPU loads the ALU and Booth multiplier as relative Logisim libraries.
+### Verified circuit hierarchy
+
+| File | Implemented circuits / subcircuits |
+|---|---|
+| `28bit_cpu.circ` | `main`, `CPU`, `ControlUnit` |
+| `28bit_alu.circ` | `main`, `Input_way`, `ANDCIRC`, `ORCIRC`, `FULL_adder`, `big_full_adder`, `x_or`, `add_sub`, `get_the_msb`, `ALU_broad`, `seventeen_bit_reduced_or` |
+| `Booths_multiplication28bit.circ` | `Booth's multiplier`, `Controller` |
+
+> Keep the three `.circ` files in the **same directory**. The committed CPU file uses repository-portable relative library references to `28bit_alu.circ` and `Booths_multiplication28bit.circ`.
 
 ---
 
@@ -197,6 +205,19 @@ flowchart LR
 
 This keeps the datapath compact and demonstrates **functional-unit reuse** rather than duplicating arithmetic hardware.
 
+### ALU status outputs
+
+The `ALU_broad` circuit also exposes the following status outputs:
+
+| Output | Meaning |
+|---|---|
+| `carry` | Carry / borrow-related arithmetic status |
+| `overflow` | Signed arithmetic overflow indication |
+| `negative` | Sign-state indication from the result |
+| `zero` | Indicates a zero ALU result |
+
+These outputs exist in the ALU implementation, but the current CPU does **not** store them in a dedicated architectural flag/status register and does not currently provide conditional-branch instructions based on them.
+
 ---
 
 ## Microprogrammed Control Unit
@@ -211,6 +232,8 @@ The control path is based on:
 - dedicated MUL handshake logic
 
 The ROM output is a 7-bit control word. The upper portion selects a decoder action while the lower bits manage micro-sequencer behavior such as count, clear, or loading the next instruction-specific microaddress.
+
+For multiplication, the Control Unit additionally exposes `mul_start` and `MUL load`, receives `booth done`, and combines the normal ROM count path with the Booth-completion advance path so the micro-sequence counter can remain at the wait state until the multiplier finishes.
 
 ### Instruction execution flow
 
@@ -243,6 +266,21 @@ flowchart TD
 ## Booth Multiplication Integration
 
 Multiplication is implemented as a dedicated **28 × 28 iterative Booth multiplier**.
+
+### Verified multiplier structure
+
+| Element | Implementation |
+|---|---|
+| Multiplicand register | `M`, 28-bit shift register |
+| Partial accumulator | `A`, 28-bit shift register |
+| Multiplier register | `Q`, 28-bit shift register |
+| Previous multiplier bit | `Q-1`, 1 bit |
+| Iteration counter | 5-bit counter, initialized with `0x1C` = 28 |
+| Internal controller | 3-bit `CAR` with an 8 × 12 control ROM |
+| Completion output | `Done` |
+| Product outputs | `product_high[27:0]`, `product_low[27:0]` |
+
+The Booth datapath reuses the project ALU library for arithmetic during the add/subtract phases and performs the required shift-and-count sequence under the multiplier's own controller.
 
 ### CPU ↔ Multiplier interface
 
@@ -373,7 +411,7 @@ M[006] = 000000C
 ### Requirements
 
 - **Logisim 2.7.1** or a compatible Logisim implementation
-- All three `.circ` files kept together
+- All three committed `.circ` files kept together in the same directory
 
 ### Procedure
 
@@ -458,6 +496,8 @@ The project intentionally emphasizes several computer-architecture concepts:
 
 ## Current Scope
 
+This README documents the **final fixed CPU / ALU / Booth baseline currently committed to `main`**.
+
 Implemented:
 
 - ✅ 28-bit CPU datapath
@@ -470,9 +510,32 @@ Implemented:
 - ✅ 56-bit Booth result exposure
 - ✅ Lower 28-bit multiplication write-back to AC
 
-Current architectural limitation:
+Current architectural limitations:
 
 - `product_high` is exposed by the Booth multiplier but is not stored in a dedicated architectural register.
+- ALU status outputs are available inside the ALU library, but the CPU currently has no dedicated architectural flag register.
+- The baseline memory interface remains a 24-bit-address / 28-bit-data main-memory interface; cache integration can be developed as a separate memory-hierarchy extension.
+
+---
+
+## Final Implementation Verification
+
+The committed circuit baseline was reviewed against the actual Logisim source structure. Key verified implementation points are:
+
+- CPU data/instruction word: **28 bits**
+- Machine instruction format: **4-bit opcode + 24-bit address/operand**
+- PC and MAR: **24 bits**
+- MBR and AC: **28 bits**
+- IR: **4 bits**
+- Main RAM interface: **24-bit address / 28-bit data**
+- ALU selector: **2 bits** for AND, ADD, OR, SUB
+- Micro-sequence counter: **6 bits**
+- Control ROM: **64 × 7**
+- MUL wait/handshake signals: **`mul_start` → `booth done` → `MUL load`**
+- Booth product: **56 bits**, exposed as `product_high : product_low`
+- CPU MUL write-back: **`AC ← product_low`**
+
+The Mermaid diagrams in this README describe the committed datapath and control flow at an architectural level; the `.circ` files remain the source of truth for gate-level wiring.
 
 ---
 
